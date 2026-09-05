@@ -299,5 +299,70 @@ class TestCLI:
         assert csv_out.exists()
 
 
+# =============================================================================
+# Input Validation Tests
+# =============================================================================
+
+class TestInputValidation:
+    def test_mdf_rejects_negative_bilirubin(self):
+        with pytest.raises(ValueError, match="bilirubin_mg_dl"):
+            calculate_maddrey_df(pt_patient=15.0, pt_control=12.0, bilirubin_mg_dl=-1.0)
+
+    def test_mdf_rejects_nan(self):
+        with pytest.raises(ValueError, match="finite"):
+            calculate_maddrey_df(pt_patient=float("nan"), pt_control=12.0, bilirubin_mg_dl=5.0)
+
+    def test_mdf_rejects_inf(self):
+        with pytest.raises(ValueError, match="finite"):
+            calculate_maddrey_df(pt_patient=float("inf"), pt_control=12.0, bilirubin_mg_dl=5.0)
+
+    def test_mdf_rejects_extreme_pt(self):
+        with pytest.raises(ValueError, match="pt_patient"):
+            calculate_maddrey_df(pt_patient=200.0, pt_control=12.0, bilirubin_mg_dl=5.0)
+
+    def test_abic_rejects_negative_age(self):
+        with pytest.raises(ValueError, match="age"):
+            calculate_abic(age=-5, bilirubin_mg_dl=5.0, inr=1.2, creatinine_mg_dl=1.0)
+
+    def test_abic_rejects_extreme_inr(self):
+        with pytest.raises(ValueError, match="inr"):
+            calculate_abic(age=50, bilirubin_mg_dl=5.0, inr=50.0, creatinine_mg_dl=1.0)
+
+    def test_meld_rejects_negative_bilirubin(self):
+        with pytest.raises(ValueError, match="bilirubin_mg_dl"):
+            calculate_meld(bilirubin_mg_dl=-0.5, inr=1.2, creatinine_mg_dl=1.0)
+
+    def test_meld_rejects_negative_creatinine(self):
+        with pytest.raises(ValueError, match="creatinine_mg_dl"):
+            calculate_meld(bilirubin_mg_dl=5.0, inr=1.2, creatinine_mg_dl=-1.0)
+
+    def test_steroid_rejects_negative_mdf(self):
+        with pytest.raises(ValueError, match="mdf_score"):
+            assess_steroid_eligibility(mdf_score=-5.0)
+
+    def test_valid_inputs_accepted(self):
+        """Normal clinical values should not raise."""
+        result = calculate_maddrey_df(pt_patient=15.0, pt_control=12.0, bilirubin_mg_dl=5.0)
+        assert result["mdf_score"] > 0
+
+
+# =============================================================================
+# New CLI Subcommand Tests
+# =============================================================================
+
+class TestNewCLICommands:
+    def test_cli_audit(self):
+        ret = main(["audit", "--task-id", "TEST-AUDIT-01"])
+        assert ret == 0
+
+    def test_cli_chat(self):
+        ret = main(["chat", "Explain", "mDF"])
+        assert ret == 0
+
+    def test_cli_verify_audit(self):
+        ret = main(["verify-audit"])
+        assert ret == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

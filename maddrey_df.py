@@ -31,6 +31,26 @@ import sys
 from typing import Dict, Any, List, Optional
 
 
+# Physiological bounds for clinical parameters
+_PT_MIN, _PT_MAX = 5.0, 120.0       # Prothrombin time (seconds)
+_BILI_MIN, _BILI_MAX = 0.0, 75.0    # Bilirubin (mg/dL)
+_INR_MIN, _INR_MAX = 0.5, 15.0      # INR (dimensionless)
+_CREAT_MIN, _CREAT_MAX = 0.1, 30.0  # Creatinine (mg/dL)
+_AGE_MIN, _AGE_MAX = 0, 120         # Age (years)
+
+
+def _validate_range(name: str, value: float, lo: float, hi: float) -> None:
+    """Validate that a clinical parameter is within physiological bounds."""
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be numeric, got {type(value).__name__}")
+    if math.isnan(value) or math.isinf(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+    if not (lo <= value <= hi):
+        raise ValueError(
+            f"{name} must be in [{lo}, {hi}], got {value}"
+        )
+
+
 def calculate_maddrey_df(
     pt_patient: float,
     pt_control: float,
@@ -40,13 +60,16 @@ def calculate_maddrey_df(
     Calculate Maddrey Discriminant Function.
 
     Parameters:
-        pt_patient: Patient's prothrombin time in seconds
-        pt_control: Control (normal) prothrombin time in seconds
-        bilirubin_mg_dl: Serum bilirubin in mg/dL
+        pt_patient: Patient's prothrombin time in seconds (5-120)
+        pt_control: Control (normal) prothrombin time in seconds (5-120)
+        bilirubin_mg_dl: Serum bilirubin in mg/dL (0-75)
 
     Returns:
         Dict with mDF score, severity classification, and recommendation.
     """
+    _validate_range("pt_patient", pt_patient, _PT_MIN, _PT_MAX)
+    _validate_range("pt_control", pt_control, _PT_MIN, _PT_MAX)
+    _validate_range("bilirubin_mg_dl", bilirubin_mg_dl, _BILI_MIN, _BILI_MAX)
     mdf = 4.6 * (pt_patient - pt_control) + bilirubin_mg_dl
     mdf = round(mdf, 2)
 
@@ -86,14 +109,18 @@ def calculate_abic(
     ABIC = (Age * 0.1) + (Bilirubin * 0.08) + (INR * 0.1) + (Creatinine * 0.3)
 
     Parameters:
-        age: Patient age in years
-        bilirubin_mg_dl: Serum bilirubin in mg/dL
-        inr: International normalized ratio
-        creatinine_mg_dl: Serum creatinine in mg/dL
+        age: Patient age in years (0-120)
+        bilirubin_mg_dl: Serum bilirubin in mg/dL (0-75)
+        inr: International normalized ratio (0.5-15)
+        creatinine_mg_dl: Serum creatinine in mg/dL (0.1-30)
 
     Returns:
         Dict with ABIC score, risk group, and survival estimate.
     """
+    _validate_range("age", age, _AGE_MIN, _AGE_MAX)
+    _validate_range("bilirubin_mg_dl", bilirubin_mg_dl, _BILI_MIN, _BILI_MAX)
+    _validate_range("inr", inr, _INR_MIN, _INR_MAX)
+    _validate_range("creatinine_mg_dl", creatinine_mg_dl, _CREAT_MIN, _CREAT_MAX)
     abic = (age * 0.1) + (bilirubin_mg_dl * 0.08) + (inr * 0.1) + (creatinine_mg_dl * 0.3)
     abic = round(abic, 2)
 
@@ -136,13 +163,16 @@ def calculate_meld(
     MELD = 3.78 * ln(Bilirubin) + 11.2 * ln(INR) + 9.57 * ln(Creatinine) + 6.43
 
     Parameters:
-        bilirubin_mg_dl: Serum bilirubin in mg/dL
-        inr: International normalized ratio
-        creatinine_mg_dl: Serum creatinine in mg/dL
+        bilirubin_mg_dl: Serum bilirubin in mg/dL (0-75)
+        inr: International normalized ratio (0.5-15)
+        creatinine_mg_dl: Serum creatinine in mg/dL (0.1-30)
 
     Returns:
         Dict with MELD score and mortality risk.
     """
+    _validate_range("bilirubin_mg_dl", bilirubin_mg_dl, _BILI_MIN, _BILI_MAX)
+    _validate_range("inr", inr, _INR_MIN, _INR_MAX)
+    _validate_range("creatinine_mg_dl", creatinine_mg_dl, _CREAT_MIN, _CREAT_MAX)
     # Clamp minimum values per MELD convention
     bili = max(bilirubin_mg_dl, 1.0)
     inr_val = max(inr, 1.0)
@@ -217,6 +247,7 @@ def assess_steroid_eligibility(
     Returns:
         Dict with eligibility assessment and contraindication details.
     """
+    _validate_range("mdf_score", mdf_score, 0.0, 200.0)
     contraindications = []
     if active_infection:
         contraindications.append("Active infection")
@@ -265,6 +296,7 @@ def comprehensive_assessment(
     """
     Perform comprehensive alcoholic hepatitis assessment using all scoring systems.
     """
+    # Validation is delegated to individual scoring functions
     mdf = calculate_maddrey_df(pt_patient, pt_control, bilirubin_mg_dl)
     abic = calculate_abic(age, bilirubin_mg_dl, inr, creatinine_mg_dl)
     meld = calculate_meld(bilirubin_mg_dl, inr, creatinine_mg_dl)
@@ -343,6 +375,22 @@ def main(argv=None):
     p_batch.add_argument("--score", choices=["mdf", "abic", "meld", "comprehensive"],
                          default="mdf", help="Score to calculate")
 
+    # Audit (integrates with agents framework)
+    p_audit = subparsers.add_parser("audit", help="Run multi-agent audit evaluation")
+    p_audit.add_argument("--task-id", default="CLI-AUDIT-01", help="Task identifier")
+    p_audit.add_argument("--target", default="CLI-TARGET-01", help="Target identifier")
+    p_audit.add_argument("--primary", type=float, default=10.0, help="Primary metric")
+    p_audit.add_argument("--secondary", type=float, default=3.0, help="Secondary metric")
+    p_audit.add_argument("--descriptor", default="NOMINAL", help="Status descriptor")
+    p_audit.add_argument("--critical", action="store_true", help="Critical flag")
+
+    # Chat (LLM reasoning)
+    p_chat = subparsers.add_parser("chat", help="Query the LLM reasoning adapter")
+    p_chat.add_argument("query", nargs="+", help="Query string")
+
+    # Verify audit integrity
+    p_verify = subparsers.add_parser("verify-audit", help="Verify HMAC audit chain integrity")
+
     args = parser.parse_args(argv)
 
     if args.command == "mdf":
@@ -380,6 +428,37 @@ def main(argv=None):
 
     elif args.command == "batch":
         _run_batch(args.input, args.output, args.score)
+
+    elif args.command == "audit":
+        from agents.supervisor import SystemSupervisor
+        from agents.models import SystemTaskPayload
+        supervisor = SystemSupervisor(model_provider="mock")
+        payload = SystemTaskPayload(
+            task_id=args.task_id,
+            target_identifier=args.target,
+            primary_metric=args.primary,
+            secondary_metric=args.secondary,
+            status_descriptor=args.descriptor,
+            is_critical_flag=args.critical,
+        )
+        dossier = supervisor.process_task(payload)
+        print(json.dumps(dossier.to_dict(), indent=2, default=str))
+
+    elif args.command == "chat":
+        from agents.supervisor import SystemSupervisor
+        supervisor = SystemSupervisor(model_provider="mock")
+        query = " ".join(args.query)
+        response = supervisor.query_supervisory_chat(query)
+        print(json.dumps({"response": response}, indent=2))
+
+    elif args.command == "verify-audit":
+        from agents.base import AuditLogger
+        verified = AuditLogger.verify_integrity()
+        trail_len = len(AuditLogger.get_trail())
+        print(json.dumps({
+            "audit_chain_valid": verified,
+            "blocks": trail_len,
+        }, indent=2))
 
     return 0
 

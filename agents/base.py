@@ -8,6 +8,7 @@ import json
 import time
 import hmac
 import hashlib
+import warnings
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
@@ -57,7 +58,16 @@ class PHIGuard:
 class AuditTrail:
     """Cryptographic Tamper-Evident HMAC-SHA256 Audit Trail."""
     def __init__(self, secret_key: Optional[str] = None):
-        self.secret_key = (secret_key or os.getenv("AUDIT_SECRET_KEY", "maddrey-discriminant-function-calc-master-audit-key-2026")).encode("utf-8")
+        resolved = secret_key or os.getenv("AUDIT_SECRET_KEY")
+        if resolved is None:
+            warnings.warn(
+                "AUDIT_SECRET_KEY not set; using a non-secret default. "
+                "Set the AUDIT_SECRET_KEY environment variable in production.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            resolved = "INSECURE-DEFAULT-CHANGE-ME"
+        self.secret_key = resolved.encode("utf-8")
         self.logs: List[Dict[str, Any]] = []
 
     def log(self, actor: str, actor_tier: str, event_type: str, details: Dict[str, Any]) -> Dict[str, Any]:
