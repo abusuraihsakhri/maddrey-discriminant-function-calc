@@ -250,7 +250,7 @@ def assess_steroid_eligibility(
     Returns:
         Dict with eligibility assessment and contraindication details.
     """
-    _validate_range("mdf_score", mdf_score, 0.0, 200.0)
+    _validate_range("mdf_score", mdf_score, -600.0, 650.0)
     contraindications = []
     if active_infection:
         contraindications.append("Active infection")
