@@ -76,8 +76,7 @@ class AlertEscalationEngine:
                         f"Patient meets criteria for corticosteroid therapy consideration.",
                 patient_id=self.patient_id,
                 mdf_score=mdf_score,
-                recommended_action="Initiate prednisolone 40mg/day x 28 days. "
-                                   "Obtain Lille score at day 7 to assess response.",
+                recommended_action="Review by hepatology; evaluate MELD, diagnosis and contraindications before considering corticosteroids. Assess Lille response if steroids are started.",
                 escalation_target="hepatology",
             )
             new_alerts.append(alert)
@@ -93,8 +92,7 @@ class AlertEscalationEngine:
                         f"Severe alcoholic hepatitis with high short-term mortality risk.",
                 patient_id=self.patient_id,
                 mdf_score=mdf_score,
-                recommended_action="Urgent hepatology consultation. Consider liver transplant evaluation. "
-                                   "Assess for contraindications to steroids (active infection, GI bleeding).",
+                recommended_action="Urgent specialist review and assessment of liver and extrahepatic organ dysfunction; do not use mDF alone to authorize therapy.",
                 escalation_target="transplant_hepatology",
             )
             new_alerts.append(alert)
@@ -106,7 +104,7 @@ class AlertEscalationEngine:
             curr_dt = datetime.fromisoformat(ts)
             days_diff = (curr_dt - prev_dt).total_seconds() / 86400.0
 
-            if days_diff <= self.RAPID_CHANGE_DAYS:
+            if 0 <= days_diff <= self.RAPID_CHANGE_DAYS:
                 score_change = abs(mdf_score - prev_score)
                 if score_change >= self.RAPID_CHANGE_THRESHOLD:
                     direction = "increased" if mdf_score > prev_score else "decreased"
@@ -138,8 +136,7 @@ class AlertEscalationEngine:
                             f"Score now below corticosteroid threshold.",
                     patient_id=self.patient_id,
                     mdf_score=mdf_score,
-                    recommended_action="Continue current treatment. Calculate Lille score at day 7 "
-                                       "to confirm steroid response.",
+                    recommended_action="Reassess the full clinical picture; falling mDF alone does not establish corticosteroid response. Use Lille when indicated.",
                     escalation_target=None,
                 )
                 new_alerts.append(alert)
@@ -202,7 +199,7 @@ class AlertEscalationEngine:
     def export_alerts_json(self, output_path: str) -> None:
         """Export all alerts to JSON."""
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(self.get_escalation_summary()), f, indent=2, default=str)
+            json.dump(self.get_escalation_summary(), f, indent=2, default=str)
 
 
 if __name__ == "__main__":
