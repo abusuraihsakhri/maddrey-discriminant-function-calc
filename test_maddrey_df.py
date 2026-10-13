@@ -85,41 +85,57 @@ class TestABIC:
     def test_abic_low_risk(self):
         """Low-risk ABIC score."""
         result = calculate_abic(age=40, bilirubin_mg_dl=5.0, inr=1.2, creatinine_mg_dl=0.8)
-        expected = round(40*0.1 + 5.0*0.08 + 1.2*0.1 + 0.8*0.3, 2)  # 4.76
+        expected = round(40*0.1 + 5.0*0.08 + 1.2*0.8 + 0.8*0.3, 2)  # 5.6
         assert abs(result["abic_score"] - expected) < 0.01
         assert result["risk_group"] == "Low"
-        assert result["estimated_1y_survival_percent"] == 100.0
+        assert result["observed_90d_survival_percent"] == 100.0
 
     def test_abic_intermediate_risk(self):
         """Intermediate-risk ABIC score."""
         result = calculate_abic(age=55, bilirubin_mg_dl=15.0, inr=2.0, creatinine_mg_dl=1.5)
-        expected = round(55*0.1 + 15.0*0.08 + 2.0*0.1 + 1.5*0.3, 2)  # 7.35
+        expected = round(55*0.1 + 15.0*0.08 + 2.0*0.8 + 1.5*0.3, 2)  # 8.75
         assert abs(result["abic_score"] - expected) < 0.01
         assert result["risk_group"] == "Intermediate"
-        assert result["estimated_1y_survival_percent"] == 70.0
+        assert result["observed_90d_survival_percent"] == 70.0
 
     def test_abic_high_risk(self):
         """High-risk ABIC score."""
         result = calculate_abic(age=65, bilirubin_mg_dl=25.0, inr=3.0, creatinine_mg_dl=3.0)
-        expected = round(65*0.1 + 25.0*0.08 + 3.0*0.1 + 3.0*0.3, 2)  # 9.7
+        expected = round(65*0.1 + 25.0*0.08 + 3.0*0.8 + 3.0*0.3, 2)  # 11.8
         assert abs(result["abic_score"] - expected) < 0.01
         assert result["risk_group"] == "High"
-        assert result["estimated_1y_survival_percent"] == 25.0
+        assert result["observed_90d_survival_percent"] == 25.0
 
     def test_abic_boundary_low(self):
-        """ABIC exactly 6.71 is intermediate."""
-        # Need: age*0.1 + bili*0.08 + inr*0.1 + crea*0.3 = 6.71
+        """Published ABIC coefficient places this example in intermediate risk."""
+        # Need: age*0.1 + bili*0.08 + inr*0.8 + crea*0.3 = 6.71
         result = calculate_abic(age=50, bilirubin_mg_dl=10.0, inr=1.5, creatinine_mg_dl=1.0)
-        expected = 50*0.1 + 10.0*0.08 + 1.5*0.1 + 1.0*0.3  # 5.0 + 0.8 + 0.15 + 0.3 = 6.25
+        expected = 50*0.1 + 10.0*0.08 + 1.5*0.8 + 1.0*0.3  # 5.0 + 0.8 + 1.2 + 0.3 = 7.3
         assert result["abic_score"] == expected
-        assert result["risk_group"] == "Low"
+        assert result["risk_group"] == "Intermediate"
 
     def test_abic_boundary_high(self):
         """ABIC >= 9.0 is high risk."""
         result = calculate_abic(age=70, bilirubin_mg_dl=20.0, inr=2.5, creatinine_mg_dl=2.0)
-        expected = 70*0.1 + 20.0*0.08 + 2.5*0.1 + 2.0*0.3  # 7.0 + 1.6 + 0.25 + 0.6 = 9.45
+        expected = 70*0.1 + 20.0*0.08 + 2.5*0.8 + 2.0*0.3  # 7.0 + 1.6 + 2.0 + 0.6 = 11.2
         assert result["abic_score"] == expected
         assert result["risk_group"] == "High"
+
+    def test_abic_published_reference_example(self):
+        result = calculate_abic(age=50, bilirubin_mg_dl=10, inr=1.5, creatinine_mg_dl=1)
+        assert result["abic_score"] == 7.30
+        assert result["risk_group"] == "Intermediate"
+        assert result["estimated_1y_survival_percent"] is None
+
+    def test_abic_thresholds_use_unrounded_values(self):
+        below = calculate_abic(age=50, bilirubin_mg_dl=7.6125, inr=1, creatinine_mg_dl=1)
+        exact = calculate_abic(age=50, bilirubin_mg_dl=7.625, inr=1, creatinine_mg_dl=1)
+        high = calculate_abic(age=60, bilirubin_mg_dl=13.75, inr=2, creatinine_mg_dl=1)
+        assert below["abic_score"] == 6.71
+        assert below["risk_group"] == "Low"
+        assert exact["risk_group"] == "Intermediate"
+        assert high["abic_score"] == 9.0
+        assert high["risk_group"] == "High"
 
 
 # =============================================================================
@@ -344,6 +360,30 @@ class TestInputValidation:
         """Normal clinical values should not raise."""
         result = calculate_maddrey_df(pt_patient=15.0, pt_control=12.0, bilirubin_mg_dl=5.0)
         assert result["mdf_score"] > 0
+
+    def test_bool_rejected_as_numeric(self):
+        with pytest.raises(TypeError):
+            calculate_maddrey_df(True, 12.0, 5.0)
+
+    def test_mdf_threshold_uses_unrounded_value(self):
+        result = calculate_maddrey_df(16.0, 12.0, 13.599)
+        assert result["mdf_score"] == 32.0
+        assert result["severity"] == "Mild"
+
+    def test_meld_does_not_claim_unvalidated_patient_mortality(self):
+        assert calculate_meld(5, 2, 1.5)["estimated_90d_mortality_percent"] is None
+
+    def test_batch_rejects_missing_columns(self, tmp_path):
+        path = tmp_path / "missing.csv"
+        path.write_text("pt_patient,bilirubin\\n17,10\\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="pt_control"):
+            main(["batch", "-i", str(path), "-o", str(tmp_path / "out.csv")])
+
+    def test_batch_rejects_blank_values(self, tmp_path):
+        path = tmp_path / "blank.csv"
+        path.write_text("pt_patient,pt_control,bilirubin\\n17,12,\\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="CSV row 2"):
+            main(["batch", "-i", str(path), "-o", str(tmp_path / "out.csv")])
 
 
 # =============================================================================
