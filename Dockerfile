@@ -11,12 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY . .
 
-RUN pip install --no-cache-dir fastapi uvicorn pydantic pytest
+RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Default: run interactive mdf CLI. Override for API server with: docker run ... python -m agents.api
-CMD ["python", "cli.py", "mdf", "--pt-patient", "17.0", "--pt-control", "12.0", "--bilirubin", "10.0"]
+CMD ["uvicorn", "agents.api:app", "--host", "0.0.0.0", "--port", "8000"]
