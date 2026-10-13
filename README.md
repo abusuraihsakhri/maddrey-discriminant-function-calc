@@ -1,169 +1,71 @@
-# Maddrey Discriminant Function Calc
+# Maddrey Discriminant Function Calculator
 
-> **Domain:** Gastroenterology, Hepatology & Clinical Nutrition
-> **Reference Guidelines:** AASLD & ACG Clinical Practice Guidelines
+Clinical reference implementation of three scoring methods used in alcohol-associated hepatitis (AH). The browser calculator runs without a backend.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB.svg?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg?logo=fastapi&logoColor=white)
+## Features
 
----
+- **Modified Maddrey Discriminant Function (mDF):** `4.6 × (patient PT − control PT) + total bilirubin (mg/dL)`. The historical severe threshold is **≥32**.
+- **ABIC:** `0.1 × age + 0.08 × bilirubin + 0.8 × INR + 0.3 × creatinine`. Risk strata: **<6.71**, **6.71–<9.0**, **≥9.0**. The original derivation reported approximate **90-day** survival of 100%, 70%, and 25% by stratum; these are cohort observations, not individualized predictions.
+- **Classic MELD:** the historical bilirubin–INR–creatinine formula; **not MELD 3.0 or a transplant-allocation calculator**.
+- A standalone **HTML/JavaScript interface**, Python CLI, CSV batch processing, FHIR helper, longitudinal monitoring, and separate FastAPI audit/chat demonstration endpoints.
 
-## What It Does
+All score outputs are for education and decision support, not diagnosis or medication authorization. The 2024 ACG guideline emphasizes MELD >20 and contraindication assessment in severe AH. The limited corticosteroid screen in the Python API is **not** comprehensive clearance for treatment.
 
-Clinical scoring calculator for alcoholic hepatitis severity assessment. Computes:
+## Browser use
 
-- **Maddrey Discriminant Function (mDF)** — severity classification and corticosteroid indication
-- **ABIC Score** — age-bilirubin-INR-creatinine prognostic score
-- **MELD Score** — model for end-stage liver disease
-- **Steroid Eligibility** — contraindication-aware corticosteroid recommendation
+Open `web/index.html` in a current browser. Enter patient PT, the **local laboratory's normal control PT**, and total serum bilirubin in **mg/dL**; expand the optional section to add age, INR, and creatinine. The page calculates entirely in JavaScript.
 
-Author: Dr. Abu Suraih Sakhri | License: MIT
+**Privacy:** The browser calculator does not make API calls or persist submitted values. Do not enter patient names or identifiers. The Python CLI reads local files; the optional API runs a separate in-memory audit demonstration and must not be deployed publicly without additional access controls and security review. The regex identifier guard is not a comprehensive PHI de-identification system.
 
----
+## Python installation and CLI
 
-## Installation
+Python 3.10 or later:
 
 ```bash
-pip install -e .
+python -m pip install -e ".[dev]"
+python cli.py mdf --pt-patient 17 --pt-control 12 --bilirubin 10
+python cli.py abic --age 50 --bilirubin 10 --inr 1.5 --creatinine 1
+python cli.py meld --bilirubin 5 --inr 2 --creatinine 1.5
+python cli.py comprehensive --pt-patient 17 --pt-control 12 --bilirubin 10 --age 50 --inr 1.5 --creatinine 1
+python cli.py batch -i sample.csv -o results.csv --score mdf
 ```
 
-For development with testing:
-```bash
-pip install -e ".[dev]"
-```
+For batch mDF, input columns are `pt_patient,pt_control,bilirubin`. Other modes require the corresponding clinical inputs; missing values are rejected rather than silently filled with defaults.
 
----
-
-## Usage
-
-### CLI — Single Score Calculation
-
-```bash
-# Maddrey DF
-python cli.py mdf --pt-patient 17.0 --pt-control 12.0 --bilirubin 10.0
-
-# ABIC Score
-python cli.py abic --age 55 --bilirubin 15.0 --inr 2.0 --creatinine 1.5
-
-# MELD Score
-python cli.py meld --bilirubin 5.0 --inr 2.0 --creatinine 1.5
-
-# Steroid Eligibility
-python cli.py steroid --mdf 40.0
-
-# Comprehensive Assessment (all scores)
-python cli.py comprehensive --pt-patient 18.0 --pt-control 12.0 --bilirubin 15.0 --age 55 --inr 2.0 --creatinine 1.5
-```
-
-### CLI — Batch Processing
-
-```bash
-python cli.py batch -i input.csv -o results.csv --score mdf
-```
-
-CSV columns for mdf: `pt_patient`, `pt_control`, `bilirubin`
-
-### Multi-Agent Audit & LLM Reasoning
-
-```bash
-# Run multi-agent audit evaluation
-python cli.py audit --task-id TASK-01 --primary 12.0 --secondary 4.0
-
-# Query LLM reasoning adapter
-python cli.py chat "Explain mDF thresholds"
-
-# Verify HMAC audit chain integrity
-python cli.py verify-audit
-```
-
-### Programmatic API
+Programmatic example:
 
 ```python
-from maddrey_df import calculate_maddrey_df, calculate_abic, calculate_meld, comprehensive_assessment
+from maddrey_df import calculate_maddrey_df, calculate_abic
 
-result = calculate_maddrey_df(pt_patient=17.0, pt_control=12.0, bilirubin_mg_dl=10.0)
-print(result["mdf_score"])  # 33.0
-print(result["severity"])   # "Severe"
+print(calculate_maddrey_df(17, 12, 10)["mdf_score"])  # 33.0
+print(calculate_abic(50, 10, 1.5, 1)["abic_score"])  # 7.3
 ```
 
-### FastAPI REST Server
+The FHIR helper requires a **laboratory-provided control PT**; LOINC 5960-0 is deprecated and **not** a general control PT code. Supported input units are seconds for PT, and mg/dL or µmol/L for bilirubin.
+
+## API and container
 
 ```bash
-uvicorn agents.api:app --host 0.0.0.0 --port 8000
+AUDIT_SECRET_KEY="replace-with-a-long-random-secret" docker compose up --build
 ```
 
-Endpoints:
-- `GET /health` — service health check
-- `GET /metrics` — Prometheus operational metrics
-- `POST /api/audit` — submit task for multi-agent evaluation
-- `POST /api/chat` — LLM reasoning query
-- `GET /api/audit/logs` — HMAC audit trail
+This serves the separate FastAPI demonstration locally at `http://127.0.0.1:8000` (including `/health`, `/api/audit` and `/api/chat`). Docker requires a configured signing key. Its audit chain is process-local; it is not durable, certified, or suitable as a clinical EHR audit record. The API is not needed for the browser calculator.
 
----
-
-## Mathematical Formulation
-
-**Maddrey DF:** `mDF = 4.6 × (PT_patient − PT_control) + Bilirubin`
-- <32: Mild — supportive care
-- ≥32: Severe — consider corticosteroids
-
-**ABIC:** `(Age × 0.1) + (Bilirubin × 0.08) + (INR × 0.1) + (Creatinine × 0.3)`
-- <6.71: Low risk (~100% 1-year survival)
-- 6.71–8.99: Intermediate (~70%)
-- ≥9.0: High risk (~25%)
-
-**MELD:** `3.78 × ln(Bilirubin) + 11.2 × ln(INR) + 9.57 × ln(Creatinine) + 6.43`
-- Values clamped per UNO/OPTN convention (min 1.0, creatinine capped at 4.0)
-
----
-
-## Input Validation
-
-All clinical parameters are validated against physiological bounds:
-
-| Parameter | Range | Unit |
-|-----------|-------|------|
-| PT (patient/control) | 5–120 | seconds |
-| Bilirubin | 0–75 | mg/dL |
-| INR | 0.5–15 | dimensionless |
-| Creatinine | 0.1–30 | mg/dL |
-| Age | 0–120 | years |
-
----
-
-## Security
-
-- **Zero-PHI Outbound Guard:** AST and regex inspection blocking SSNs, MRNs, phone numbers, emails, and patient identifiers
-- **HMAC-SHA256 Audit Trail:** Chained, cryptographically signed logs for every evaluation
-- **Configurable Secret:** Set `AUDIT_SECRET_KEY` environment variable in production (never use defaults)
-
----
-
-## Testing
+## Tests and compatibility
 
 ```bash
-pytest -v
+python -m pytest -q
+node --test tests_js/calculator.test.cjs
 ```
 
----
-
-## Container Deployment
-
-```bash
-docker build -t maddrey-discriminant-function-calc .
-docker run -e AUDIT_SECRET_KEY=your-secret-key -p 8000:8000 maddrey-discriminant-function-calc
-```
-
-Or with docker-compose:
-```bash
-AUDIT_SECRET_KEY=your-secret-key docker compose up
-```
-
----
+GitHub Actions runs Python 3.10–3.12 and Node 22 checks. The static page uses standard HTML, CSS, and vanilla JavaScript (no runtime packages), intended for current evergreen desktop and mobile browsers. Its GitHub Pages workflow publishes the `web/` directory from `master`.
 
 ## References
 
-- Maddrey WC, et al. *Hepatology* 1989;9:675–80.
-- Dominguez M, et al. *Gastroenterology* 2008;135:865–73 (ABIC).
-- Kamath PS, et al. *Hepatology* 2001;33:464–70 (MELD).
+- Maddrey WC et al. *Corticosteroid therapy of alcoholic hepatitis*. Gastroenterology. 1978;75:193–199.
+- Domínguez M et al. *A new scoring system for prognostic stratification of patients with alcoholic hepatitis*. Am J Gastroenterol. 2008;103:2747–2756. [PubMed](https://pubmed.ncbi.nlm.nih.gov/18721242/).
+- Jophlin LL et al. *ACG Clinical Guideline: Alcohol-Associated Liver Disease*. Am J Gastroenterol. 2024. [Full text](https://pmc.ncbi.nlm.nih.gov/articles/PMC11040545/).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

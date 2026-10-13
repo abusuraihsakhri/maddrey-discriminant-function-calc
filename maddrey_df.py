@@ -7,10 +7,10 @@ mDF = 4.6 * (PT_patient - PT_control) + bilirubin_mg_dL
   - <32: Mild alcoholic hepatitis (supportive care)
   - >=32: Severe alcoholic hepatitis (consider corticosteroids)
 
-ABIC = (Age * 0.1) + (Bilirubin * 0.08) + (INR * 0.1) + (Creatinine * 0.3)
-  - <6.71: Low mortality risk (1-year survival ~100%)
-  - 6.71-8.99: Intermediate risk (1-year survival ~70%)
-  - >=9.0: High risk (1-year survival ~25%)
+ABIC = (Age * 0.1) + (Bilirubin * 0.08) + (INR * 0.8) + (Creatinine * 0.3)
+  - <6.71: Low mortality risk (original-cohort 90-day survival ~100%)
+  - 6.71-8.99: Intermediate risk (original-cohort 90-day survival ~70%)
+  - >=9.0: High risk (original-cohort 90-day survival ~25%)
 
 MELD = 3.78 * ln(Bilirubin) + 11.2 * ln(INR) + 9.57 * ln(Creatinine) + 6.43
 
@@ -41,7 +41,7 @@ _AGE_MIN, _AGE_MAX = 0, 120         # Age (years)
 
 def _validate_range(name: str, value: float, lo: float, hi: float) -> None:
     """Validate that a clinical parameter is within physiological bounds."""
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{name} must be numeric, got {type(value).__name__}")
     if math.isnan(value) or math.isinf(value):
         raise ValueError(f"{name} must be finite, got {value}")
@@ -70,16 +70,16 @@ def calculate_maddrey_df(
     _validate_range("pt_patient", pt_patient, _PT_MIN, _PT_MAX)
     _validate_range("pt_control", pt_control, _PT_MIN, _PT_MAX)
     _validate_range("bilirubin_mg_dl", bilirubin_mg_dl, _BILI_MIN, _BILI_MAX)
-    mdf = 4.6 * (pt_patient - pt_control) + bilirubin_mg_dl
-    mdf = round(mdf, 2)
+    raw_mdf = 4.6 * (pt_patient - pt_control) + bilirubin_mg_dl
+    mdf = round(raw_mdf, 2)
 
-    if mdf < 32:
+    if raw_mdf < 32:
         severity = "Mild"
-        recommendation = "Mild alcoholic hepatitis. Supportive care recommended. Corticosteroids not indicated."
+        recommendation = "Below the historical mDF severe threshold. Interpret with the full clinical picture and additional prognostic assessment."
         steroid_eligible = False
     else:
         severity = "Severe"
-        recommendation = "Severe alcoholic hepatitis. Consider corticosteroids (prednisolone 40 mg/day for 28 days) if no contraindications."
+        recommendation = "Meets the historical mDF severe threshold. A clinician must confirm the diagnosis, evaluate MELD and screen for contraindications before considering treatment."
         steroid_eligible = True
 
     return {
@@ -106,7 +106,7 @@ def calculate_abic(
     """
     Calculate ABIC (Age, Bilirubin, INR, Creatinine) score.
 
-    ABIC = (Age * 0.1) + (Bilirubin * 0.08) + (INR * 0.1) + (Creatinine * 0.3)
+    ABIC = (Age * 0.1) + (Bilirubin * 0.08) + (INR * 0.8) + (Creatinine * 0.3)
 
     Parameters:
         age: Patient age in years (0-120)
@@ -121,27 +121,29 @@ def calculate_abic(
     _validate_range("bilirubin_mg_dl", bilirubin_mg_dl, _BILI_MIN, _BILI_MAX)
     _validate_range("inr", inr, _INR_MIN, _INR_MAX)
     _validate_range("creatinine_mg_dl", creatinine_mg_dl, _CREAT_MIN, _CREAT_MAX)
-    abic = (age * 0.1) + (bilirubin_mg_dl * 0.08) + (inr * 0.1) + (creatinine_mg_dl * 0.3)
+    abic = (age * 0.1) + (bilirubin_mg_dl * 0.08) + (inr * 0.8) + (creatinine_mg_dl * 0.3)
+    raw_abic = abic
     abic = round(abic, 2)
 
-    if abic < 6.71:
+    if raw_abic < 6.71:
         risk_group = "Low"
         survival_1y = 100.0
-        recommendation = "Low mortality risk. Supportive care with monitoring."
-    elif abic <= 8.99:
+        recommendation = "Low ABIC risk stratum in the original cohort; interpret in clinical context."
+    elif raw_abic < 9.0:
         risk_group = "Intermediate"
         survival_1y = 70.0
-        recommendation = "Intermediate mortality risk. Consider corticosteroids. Close monitoring required."
+        recommendation = "Intermediate ABIC risk stratum; treatment decisions require clinical assessment, not ABIC alone."
     else:
         risk_group = "High"
         survival_1y = 25.0
-        recommendation = "High mortality risk. Consider corticosteroids or early transplant evaluation."
+        recommendation = "High ABIC risk stratum; specialist evaluation is appropriate."
 
     return {
         "tool": "abic-score",
         "abic_score": abic,
         "risk_group": risk_group,
-        "estimated_1y_survival_percent": survival_1y,
+        "observed_90d_survival_percent": survival_1y,
+        "estimated_1y_survival_percent": None,  # Deprecated: published strata refer to 90-day survival.
         "recommendation": recommendation,
         "components": {
             "age": age,
@@ -210,7 +212,8 @@ def calculate_meld(
         "tool": "meld-score",
         "meld_score": meld,
         "mortality_risk": mortality_risk,
-        "estimated_90d_mortality_percent": mortality_90d,
+        "estimated_90d_mortality_percent": None,  # Coarse lookup percentages are not validated patient estimates.
+        "interpretation": "Legacy MELD risk bands are illustrative only; use clinical prognostic guidance.",
         "components": {
             "bilirubin_mg_dl": bilirubin_mg_dl,
             "inr": inr,
@@ -247,7 +250,7 @@ def assess_steroid_eligibility(
     Returns:
         Dict with eligibility assessment and contraindication details.
     """
-    _validate_range("mdf_score", mdf_score, 0.0, 200.0)
+    _validate_range("mdf_score", mdf_score, -600.0, 650.0)
     contraindications = []
     if active_infection:
         contraindications.append("Active infection")
@@ -269,11 +272,12 @@ def assess_steroid_eligibility(
         reason = f"mDF >= 32 but contraindications present: {', '.join(contraindications)}."
     else:
         eligible = True
-        reason = "mDF >= 32 with no contraindications. Corticosteroids recommended (prednisolone 40 mg/day x 28 days)."
+        reason = "mDF >= 32 and none of the four listed concerns flagged; this is a partial screening result, NOT authorization to prescribe. Check MELD, infection, HBV/TB, uncontrolled diabetes, renal function and other contraindications."
 
     return {
         "tool": "steroid-eligibility",
-        "eligible": eligible,
+        "eligible": eligible,  # Legacy partial-screening flag, not a treatment order.
+        "requires_clinician_review": True,
         "mdf_score": mdf_score,
         "severe_hepatitis": severe,
         "contraindications": contraindications,
@@ -470,44 +474,58 @@ def _run_batch(input_csv: str, output_csv: str, score_type: str) -> None:
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
 
+    required = {
+        "mdf": ["pt_patient", "pt_control", "bilirubin"],
+        "abic": ["age", "bilirubin", "inr", "creatinine"],
+        "meld": ["bilirubin", "inr", "creatinine"],
+        "comprehensive": ["pt_patient", "pt_control", "bilirubin", "age", "inr", "creatinine"],
+    }[score_type]
+    missing = [name for name in required if name not in fieldnames]
+    if missing:
+        raise ValueError(f"Missing required CSV columns: {', '.join(missing)}")
+    for row_number, row in enumerate(rows, start=2):
+        empty = [name for name in required if row.get(name) is None or not str(row[name]).strip()]
+        if empty:
+            raise ValueError(f"CSV row {row_number}: missing required values: {', '.join(empty)}")
+
     out_rows = []
     for r in rows:
         if score_type == "mdf":
             result = calculate_maddrey_df(
-                pt_patient=float(r.get("pt_patient", 15)),
-                pt_control=float(r.get("pt_control", 12)),
-                bilirubin_mg_dl=float(r.get("bilirubin", 5)),
+                pt_patient=float(r["pt_patient"]),
+                pt_control=float(r["pt_control"]),
+                bilirubin_mg_dl=float(r["bilirubin"]),
             )
             row_dict = dict(r)
             row_dict["mdf_score"] = result["mdf_score"]
             row_dict["severity"] = result["severity"]
         elif score_type == "abic":
             result = calculate_abic(
-                age=int(float(r.get("age", 50))),
-                bilirubin_mg_dl=float(r.get("bilirubin", 5)),
-                inr=float(r.get("inr", 1.5)),
-                creatinine_mg_dl=float(r.get("creatinine", 1.0)),
+                age=int(float(r["age"])),
+                bilirubin_mg_dl=float(r["bilirubin"]),
+                inr=float(r["inr"]),
+                creatinine_mg_dl=float(r["creatinine"]),
             )
             row_dict = dict(r)
             row_dict["abic_score"] = result["abic_score"]
             row_dict["risk_group"] = result["risk_group"]
         elif score_type == "meld":
             result = calculate_meld(
-                bilirubin_mg_dl=float(r.get("bilirubin", 5)),
-                inr=float(r.get("inr", 1.5)),
-                creatinine_mg_dl=float(r.get("creatinine", 1.0)),
+                bilirubin_mg_dl=float(r["bilirubin"]),
+                inr=float(r["inr"]),
+                creatinine_mg_dl=float(r["creatinine"]),
             )
             row_dict = dict(r)
             row_dict["meld_score"] = result["meld_score"]
             row_dict["mortality_risk"] = result["mortality_risk"]
         else:
             result = comprehensive_assessment(
-                pt_patient=float(r.get("pt_patient", 15)),
-                pt_control=float(r.get("pt_control", 12)),
-                bilirubin_mg_dl=float(r.get("bilirubin", 5)),
-                age=int(float(r.get("age", 50))),
-                inr=float(r.get("inr", 1.5)),
-                creatinine_mg_dl=float(r.get("creatinine", 1.0)),
+                pt_patient=float(r["pt_patient"]),
+                pt_control=float(r["pt_control"]),
+                bilirubin_mg_dl=float(r["bilirubin"]),
+                age=int(float(r["age"])),
+                inr=float(r["inr"]),
+                creatinine_mg_dl=float(r["creatinine"]),
             )
             row_dict = dict(r)
             row_dict["mdf_score"] = result["maddrey_df"]["mdf_score"]
@@ -522,7 +540,7 @@ def _run_batch(input_csv: str, output_csv: str, score_type: str) -> None:
         "meld": ["meld_score", "mortality_risk"],
         "comprehensive": ["mdf_score", "abic_score", "meld_score", "steroid_eligible"],
     }
-    out_fields = fieldnames + extra_fields.get(score_type, [])
+    out_fields = list(dict.fromkeys(fieldnames + extra_fields.get(score_type, [])))
 
     with open(output_csv, mode="w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=out_fields)

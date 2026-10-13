@@ -19,7 +19,7 @@ FHIR_DIAGNOSTIC_REPORT = "DiagnosticReport"
 
 # LOINC codes for mDF components
 LOINC_PT = "5902-2"           # Prothrombin time (PT)
-LOINC_CONTROL_PT = "5960-0"   # PT control
+LOINC_CONTROL_PT = None       # No standard LOINC code for the laboratory control PT used in mDF
 LOINC_BILIRUBIN = "1975-2"    # Bilirubin [Mass/volume] in Serum or Plasma
 
 
@@ -29,18 +29,19 @@ def extract_fhir_observation(resource: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
 
     code = resource.get("code", {})
-    coding = code.get("coding", [{}])
-    loinc_code = coding[0].get("code", "") if coding else ""
+    coding = code.get("coding", [])
+    loinc = next((item for item in coding if item.get("system") == "http://loinc.org"), {})
+    loinc_code = loinc.get("code", "")
 
     value_quantity = resource.get("valueQuantity", {})
     value = value_quantity.get("value")
-    unit = value_quantity.get("unit", "")
+    unit = value_quantity.get("code") or value_quantity.get("unit", "")
 
     effective_dt = resource.get("effectiveDateTime", "")
 
     return {
         "loinc_code": loinc_code,
-        "display": coding[0].get("display", "") if coding else "",
+        "display": loinc.get("display", ""),
         "value": value,
         "unit": unit,
         "effective_datetime": effective_dt,
@@ -48,10 +49,10 @@ def extract_fhir_observation(resource: Dict[str, Any]) -> Optional[Dict[str, Any
     }
 
 
-def extract_mdf_components(observations: List[Dict[str, Any]]) -> Dict[str, Any]:
+def extract_mdf_components(observations: List[Dict[str, Any]], control_pt_seconds: Optional[float] = None) -> Dict[str, Any]:
     """Extract mDF components from a list of FHIR Observations."""
     pt_value = None
-    control_pt_value = None
+    control_pt_value = control_pt_seconds
     bilirubin_value = None
     effective_date = None
 
@@ -64,12 +65,18 @@ def extract_mdf_components(observations: List[Dict[str, Any]]) -> Dict[str, Any]
         val = extracted["value"]
 
         if code == LOINC_PT and val is not None:
+            if extracted["unit"] not in ("s", "sec", "seconds"):
+                raise ValueError("PT units must be seconds (UCUM 's').")
             pt_value = float(val)
             effective_date = extracted["effective_datetime"]
-        elif code == LOINC_CONTROL_PT and val is not None:
-            control_pt_value = float(val)
         elif code == LOINC_BILIRUBIN and val is not None:
-            bilirubin_value = float(val)
+            unit = extracted["unit"]
+            if unit == "mg/dL":
+                bilirubin_value = float(val)
+            elif unit in ("umol/L", "µmol/L"):
+                bilirubin_value = float(val) / 17.104
+            else:
+                raise ValueError("Bilirubin units must be mg/dL or µmol/L.")
 
     return {
         "pt_seconds": pt_value,
@@ -167,9 +174,9 @@ def build_cds_hooks_card(mdf_score: float, classification: str,
     """Build a CDS Hooks response card for mDF result."""
     if mdf_score >= 32:
         indicator = "critical"
-        summary = f"mDF = {mdf_score:.1f} — Consider corticosteroid therapy"
-        detail = (f"Maddrey DF score of {mdf_score:.1f} is >= 32, indicating severe alcoholic hepatitis. "
-                  f"Corticosteroid therapy (prednisolone 40mg/day x 28 days) is recommended per AASLD guidelines.")
+        summary = f"mDF = {mdf_score:.1f} — Review clinical severity"
+        detail = (f"mDF of {mdf_score:.1f} meets the historical severe threshold. "
+                  "Clinical diagnosis and evaluation of MELD and treatment contraindications are required.")
     elif mdf_score >= 20:
         indicator = "warning"
         summary = f"mDF = {mdf_score:.1f} — Monitor closely"
@@ -178,7 +185,7 @@ def build_cds_hooks_card(mdf_score: float, classification: str,
     else:
         indicator = "info"
         summary = f"mDF = {mdf_score:.1f} — Low severity"
-        detail = f"Maddrey DF score of {mdf_score:.1f} is below 32. Corticosteroid therapy is not indicated."
+        detail = f"mDF of {mdf_score:.1f} is below 32; clinical assessment remains necessary."
 
     return {
         "cards": [{
@@ -189,11 +196,6 @@ def build_cds_hooks_card(mdf_score: float, classification: str,
                 "label": "Maddrey DF Calculator",
                 "type": "system",
             },
-            "links": [{
-                "label": "View mDF Trend",
-                "url": f"/api/patients/{patient_id}/mdf-trend",
-                "type": "absolute",
-            }],
         }]
     }
 
@@ -201,14 +203,15 @@ def build_cds_hooks_card(mdf_score: float, classification: str,
 class FHIRmDFIntegration:
     """High-level FHIR integration for Maddrey DF computation."""
 
-    def __init__(self, patient_ref: str):
+    def __init__(self, patient_ref: str, control_pt_seconds: Optional[float] = None):
         self.patient_ref = patient_ref
+        self.control_pt_seconds = control_pt_seconds
         self.observations: List[Dict[str, Any]] = []
 
     def ingest_observation(self, resource: Dict[str, Any]) -> bool:
         """Ingest a FHIR Observation resource. Returns True if relevant to mDF."""
         extracted = extract_fhir_observation(resource)
-        if extracted and extracted["loinc_code"] in [LOINC_PT, LOINC_CONTROL_PT, LOINC_BILIRUBIN]:
+        if extracted and extracted["loinc_code"] in [LOINC_PT, LOINC_BILIRUBIN]:
             self.observations.append(resource)
             return True
         return False
@@ -224,14 +227,14 @@ class FHIRmDFIntegration:
 
     def compute_from_fhir(self) -> Dict[str, Any]:
         """Compute mDF from ingested FHIR observations."""
-        components = extract_mdf_components(self.observations)
+        components = extract_mdf_components(self.observations, self.control_pt_seconds)
 
         if not components["complete"]:
             missing = []
             if components["pt_seconds"] is None:
                 missing.append("PT (LOINC 5902-2)")
             if components["control_pt_seconds"] is None:
-                missing.append("Control PT (LOINC 5960-0)")
+                missing.append("Control PT (laboratory-specific reference, seconds)")
             if components["bilirubin_mg_dl"] is None:
                 missing.append("Bilirubin (LOINC 1975-2)")
             return {
@@ -240,22 +243,18 @@ class FHIRmDFIntegration:
                 "available": {k: v for k, v in components.items() if v is not None and k != "complete"},
             }
 
-        mdf = 4.6 * (components["pt_seconds"] - components["control_pt_seconds"]) + components["bilirubin_mg_dl"]
-
-        if mdf < 32:
-            classification = "Low severity - No corticosteroid benefit"
-        elif mdf <= 54:
-            classification = "Moderate-Severe - Consider corticosteroids"
-        else:
-            classification = "Severe - Strong corticosteroid indication"
+        from maddrey_df import calculate_maddrey_df
+        result = calculate_maddrey_df(
+            components["pt_seconds"], components["control_pt_seconds"], components["bilirubin_mg_dl"]
+        )
+        mdf = result["mdf_score"]
+        classification = "At/above historical mDF severe threshold" if result["steroid_eligible_by_mdf"] else "Below historical mDF severe threshold"
 
         report = build_mdf_diagnostic_report(
             mdf_score=mdf,
             classification=classification,
             patient_ref=self.patient_ref,
-            component_refs=[f"Observation/pt-{self.patient_ref}",
-                           f"Observation/control-pt-{self.patient_ref}",
-                           f"Observation/bilirubin-{self.patient_ref}"],
+            component_refs=[],  # Avoid inventing FHIR Observation references.
         )
 
         return {
@@ -273,13 +272,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FHIR Integration for Maddrey DF")
     parser.add_argument("--input", required=True, help="FHIR Bundle JSON file")
     parser.add_argument("--patient-ref", default="Patient/example", help="FHIR patient reference")
+    parser.add_argument("--control-pt", type=float, help="Local laboratory control PT (seconds)")
     parser.add_argument("--output", default="fhir_mdf_result.json", help="Output JSON")
     args = parser.parse_args()
 
     with open(args.input, "r") as f:
         bundle = json.load(f)
 
-    integration = FHIRmDFIntegration(args.patient_ref)
+    integration = FHIRmDFIntegration(args.patient_ref, control_pt_seconds=args.control_pt)
     integration.ingest_bundle(bundle)
     result = integration.compute_from_fhir()
 

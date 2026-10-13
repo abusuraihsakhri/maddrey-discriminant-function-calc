@@ -53,17 +53,15 @@ def calculate_mdf(pt_seconds: float, control_pt_seconds: float, bilirubin_mg_dl:
     """Calculate Maddrey's Discriminant Function.
     mDF = 4.6 × (PT_patient - PT_control) + Bilirubin
     """
-    return 4.6 * (pt_seconds - control_pt_seconds) + bilirubin_mg_dl
+    from maddrey_df import calculate_maddrey_df
+    return calculate_maddrey_df(pt_seconds, control_pt_seconds, bilirubin_mg_dl)["mdf_score"]
 
 
 def classify_mdf(mdf: float) -> str:
     """Classify mDF score into clinical tiers."""
     if mdf < 32:
-        return "Low (mDF < 32) - No corticosteroid benefit"
-    elif mdf <= 54:
-        return "Moderate-Severe (32-54) - Consider corticosteroids"
-    else:
-        return "Severe (mDF > 54) - Strong corticosteroid indication"
+        return "Below the historical mDF severe threshold"
+    return "At or above the historical mDF severe threshold; clinician review required"
 
 
 class LongitudinalTracker:
@@ -91,6 +89,7 @@ class LongitudinalTracker:
             notes=notes,
         )
         self.entries.append(entry)
+        self.entries.sort(key=lambda item: datetime.fromisoformat(item.timestamp))
         return entry
 
     def compute_trend(self) -> TrendResult:
@@ -118,10 +117,16 @@ class LongitudinalTracker:
         sum_y2 = sum(s * s for s in scores)
 
         denom = n * sum_x2 - sum_x * sum_x
-        if denom == 0:
-            slope = 0.0
-        else:
-            slope = (n * sum_xy - sum_x * sum_y) / denom
+        if abs(denom) < 1e-12:
+            return TrendResult(
+                trend_direction="insufficient_data",
+                slope_per_day=0.0,
+                r_squared=0.0,
+                days_tracked=0,
+                score_change=round(scores[-1] - scores[0], 2),
+                clinical_significance="Assessments must have distinct timestamps to estimate a trend",
+            )
+        slope = (n * sum_xy - sum_x * sum_y) / denom
 
         # R-squared
         mean_y = sum_y / n
@@ -136,13 +141,13 @@ class LongitudinalTracker:
         # Classify trend
         if slope < -0.5:
             direction = "improving"
-            significance = "mDF declining - treatment may be effective"
+            significance = "mDF declining; this alone cannot establish treatment response"
         elif slope > 0.5:
             direction = "deteriorating"
-            significance = "mDF rising - consider treatment escalation or alternative therapy"
+            significance = "mDF rising; full clinical reassessment needed"
         else:
             direction = "stable"
-            significance = "mDF stable - continue current management"
+            significance = "mDF stable; treatment decisions require clinical reassessment"
 
         return TrendResult(
             trend_direction=direction,
@@ -168,12 +173,7 @@ class LongitudinalTracker:
         if outcomes.get("mortality"):
             correlation["mortality_risk"] = "high" if latest and latest.mdf_score >= 32 else "low"
         if outcomes.get("steroid_response"):
-            if trend.trend_direction == "improving":
-                correlation["steroid_response"] = "likely_responder"
-            elif trend.trend_direction == "deteriorating":
-                correlation["steroid_response"] = "likely_non_responder"
-            else:
-                correlation["steroid_response"] = "indeterminate"
+            correlation["steroid_response"] = "not_determinable_from_mdf_alone; consider validated Lille assessment"
 
         return correlation
 
@@ -185,7 +185,7 @@ class LongitudinalTracker:
         if self.entries:
             latest = self.entries[-1]
             if latest.mdf_score >= 32:
-                alerts.append(f"CRITICAL: Latest mDF = {latest.mdf_score} >= 32. Consider corticosteroid therapy.")
+                alerts.append(f"CLINICAL REVIEW: Latest mDF = {latest.mdf_score} >= 32; confirm diagnosis and assess MELD and contraindications.")
             if trend.trend_direction == "deteriorating":
                 alerts.append(f"WARNING: mDF trending upward (slope={trend.slope_per_day}/day). Reassess treatment.")
 
@@ -221,11 +221,17 @@ def load_from_csv(input_csv: str, patient_id: str) -> LongitudinalTracker:
     tracker = LongitudinalTracker(patient_id)
     with open(input_csv, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        for row in reader:
+        required = ["pt_seconds", "control_pt_seconds", "bilirubin_mg_dl"]
+        missing = [name for name in required if name not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"Missing CSV columns: {', '.join(missing)}")
+        for number, row in enumerate(reader, start=2):
+            if any(row.get(name) is None or not str(row[name]).strip() for name in required):
+                raise ValueError(f"CSV row {number} has missing clinical measurements")
             tracker.add_entry(
-                pt_seconds=float(row.get("pt_seconds", 0)),
-                control_pt_seconds=float(row.get("control_pt_seconds", 12.0)),
-                bilirubin_mg_dl=float(row.get("bilirubin_mg_dl", 0)),
+                pt_seconds=float(row["pt_seconds"]),
+                control_pt_seconds=float(row["control_pt_seconds"]),
+                bilirubin_mg_dl=float(row["bilirubin_mg_dl"]),
                 treatment=row.get("treatment"),
                 notes=row.get("notes"),
                 timestamp=row.get("timestamp"),
