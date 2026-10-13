@@ -352,9 +352,13 @@ class TestInputValidation:
         with pytest.raises(ValueError, match="creatinine_mg_dl"):
             calculate_meld(bilirubin_mg_dl=5.0, inr=1.2, creatinine_mg_dl=-1.0)
 
-    def test_steroid_rejects_negative_mdf(self):
-        with pytest.raises(ValueError, match="mdf_score"):
-            assess_steroid_eligibility(mdf_score=-5.0)
+    def test_negative_mdf_is_not_steroid_eligible(self):
+        result = assess_steroid_eligibility(mdf_score=-5.0)
+        assert result["eligible"] is False
+
+    def test_high_mdf_is_not_rejected_by_arbitrary_cap(self):
+        result = assess_steroid_eligibility(mdf_score=230.0)
+        assert result["severe_hepatitis"] is True
 
     def test_valid_inputs_accepted(self):
         """Normal clinical values should not raise."""
