@@ -4,6 +4,7 @@
   const results = document.getElementById("results");
   const message = document.getElementById("message");
   const output = document.getElementById("score-output");
+  const emptyState = document.getElementById("empty-state");
 
   function value(id) {
     return document.getElementById(id).value.trim();
@@ -58,6 +59,7 @@
         addResult("ABIC prognostic score", other.abic.score.toFixed(2), other.abic.risk + " risk stratum in the original ABIC cohort.");
         addResult("Classic MELD (historical three-variable formula)", other.meld.score.toFixed(1), "Not MELD 3.0 and not a transplant allocation score.");
       }
+      emptyState.hidden = true;
       results.hidden = false;
       results.focus();
     } catch (error) {
@@ -67,6 +69,7 @@
 
   form.addEventListener("reset", function () {
     results.hidden = true;
+    emptyState.hidden = false;
     message.textContent = "";
     output.replaceChildren();
   });
